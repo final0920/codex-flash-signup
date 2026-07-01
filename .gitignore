@@ -1,0 +1,28 @@
+build/
+web/dist/
+web/node_modules/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.docker.example
+.vscode/
+tmp/
+data/
+.claude/
+.omc
+
+*.pyc
+__pycache__/
+# Project specific
+backups/
+/out/
+docs/reviews/
+tests_runtime/
+
+# Custom
+index/
+.serena/
+
+# har
+har/

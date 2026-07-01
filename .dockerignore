@@ -1,0 +1,12 @@
+.git/
+.claude/
+.vscode/
+build/
+data/
+tmp/
+web/dist/
+web/node_modules/
+*.log
+.env
+.env.*
+!.env.docker.example

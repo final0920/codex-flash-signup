@@ -1,0 +1,29 @@
+services:
+  mongoose:
+    platform: ${MONGOOSE_PLATFORM:-linux/amd64}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mongoose-svelte:local
+    container_name: mongoose-svelte
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      MONGOOSE_LISTEN_URL: http://0.0.0.0:8000
+      LIBCURL_IMPERSONATE_LIB: /usr/lib/libcurl-impersonate.so
+    ports:
+      - "${MONGOOSE_HOST_PORT:-8000}:8000"
+    volumes:
+      - mongoose-data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/login >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  mongoose-data:
