@@ -24,10 +24,6 @@ struct identity_result {
 
 int identity_generate(sqlite3 *db, struct identity_result *out, char *error,
                       size_t error_len);
-// outlook 直注: 给定母邮箱, 生成 "母local+随机后缀@域名" 的别名身份
-int identity_generate_outlook_alias(sqlite3 *db, const char *mother_email,
-                                    struct identity_result *out, char *error,
-                                    size_t error_len);
 size_t identity_to_json(const struct identity_result *identity, char *buf,
                         size_t len);
 

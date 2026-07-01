@@ -3,7 +3,6 @@
 #include "mail/rapid_inbox.h"
 #include "mongoose.h"
 #include "oauth/codex_session_oauth.h"
-#include "registration/workspace_join.h"
 
 #include <ctype.h>
 #include <stdbool.h>
@@ -43,7 +42,6 @@ enum register_step {
   STEP_SESSION,
   STEP_TOKEN_EXCHANGE,
   STEP_CODEX_OAUTH,
-  STEP_WORKSPACE_JOIN,
   STEP_DONE
 };
 
@@ -62,7 +60,6 @@ struct web_register_state {
   char body[1024];
   char url[FLOW_URL_LEN];
   struct codex_current_session_state codex;
-  struct workspace_join_state wsjoin;
   int otp_attempts;
   int otp_resend_count;
   int redirect_attempts;
@@ -389,7 +386,6 @@ static const char *step_label(enum register_step step) {
     case STEP_SESSION: return "site session";
     case STEP_TOKEN_EXCHANGE: return "token exchange";
     case STEP_CODEX_OAUTH: return "current session codex oauth";
-    case STEP_WORKSPACE_JOIN: return "workspace join";
     case STEP_DONE: return "done";
     default: return "unknown";
   }
@@ -812,8 +808,6 @@ static enum flow_provider_action provider_next(struct flow_context *flow,
     }
     case STEP_CODEX_OAUTH:
       return codex_current_session_next(flow, &state->codex, request);
-    case STEP_WORKSPACE_JOIN:
-      return workspace_join_next(flow, &state->wsjoin, request);
     case STEP_DONE:
       return FLOW_PROVIDER_DONE;
     default:
@@ -1087,12 +1081,6 @@ static int provider_response(struct flow_context *flow,
         flow->step = STEP_SESSION;
         return 0;
       }
-      if (flow->mode == FLOW_MODE_REGISTER_THEN_WORKSPACE_JOIN) {
-        flow_context_log(flow, "info",
-                         "ChatGPT 注册成功, 读取 session 以加入母号 workspace");
-        flow->step = STEP_SESSION;
-        return 0;
-      }
       if (flow->mode == FLOW_MODE_REGISTER_THEN_CURRENT_CODEX) {
         if (codex_current_session_persist_baseline(flow, "temp") != 0) {
           return -1;
@@ -1132,13 +1120,6 @@ static int provider_response(struct flow_context *flow,
                        "ChatGPT session 已获取 Access Token%s%s",
                        flow->session_token[0] ? "，Session Token=yes" : "",
                        flow->cookies[0] ? "，Cookies=yes" : "");
-      if (flow->mode == FLOW_MODE_REGISTER_THEN_WORKSPACE_JOIN) {
-        if (workspace_join_start(flow, &state->wsjoin) != 0) {
-          return -1;
-        }
-        flow->step = STEP_WORKSPACE_JOIN;
-        return 0;
-      }
       flow->step = STEP_TOKEN_EXCHANGE;
       return 0;
     }
@@ -1185,15 +1166,6 @@ static int provider_response(struct flow_context *flow,
       }
       if (codex_current_session_is_done(&state->codex)) {
         flow_context_log(flow, "info", "当前会话 Codex OAuth 完成");
-      }
-      return 0;
-    case STEP_WORKSPACE_JOIN:
-      if (workspace_join_on_response(flow, &state->wsjoin, response) != 0) {
-        return -1;
-      }
-      if (workspace_join_is_done(&state->wsjoin)) {
-        flow_context_log(flow, "info", "workspace 加入完成");
-        flow->step = STEP_DONE;
       }
       return 0;
     default:

@@ -156,17 +156,6 @@ static void generate_domain_label(char *out, size_t out_len) {
   out[n] = '\0';
 }
 
-// outlook 别名后缀: 5-8 位随机小写字母数字(如 a3k9c)
-static void generate_alias_suffix(char *out, size_t out_len) {
-  unsigned len = 5 + random_bounded(4);
-  size_t n = 0;
-  if (out_len == 0) return;
-  for (unsigned i = 0; i < len && n + 1 < out_len; i++) {
-    out[n++] = random_alnum();
-  }
-  out[n] = '\0';
-}
-
 static void build_email_domain(const struct domain_rule_row *rule, char *out,
                                size_t out_len) {
   struct mg_iobuf io = {0, 0, 0, 128};
@@ -250,107 +239,6 @@ int identity_generate(sqlite3 *db, struct identity_result *out, char *error,
     return -1;
   }
   generate_password(out->password, sizeof(out->password));
-  generate_birthdate(out->birthdate, sizeof(out->birthdate), &out->age);
-  return 0;
-}
-
-int identity_generate_outlook_alias(sqlite3 *db, const char *mother_email,
-                                    struct identity_result *out, char *error,
-                                    size_t error_len) {
-  struct generated_name name;
-  const char *at;
-  char local[128];
-  size_t local_len;
-  int attempts = 0;
-
-  if (out == NULL) {
-    set_error(error, error_len, "identity output is null");
-    return -1;
-  }
-  memset(out, 0, sizeof(*out));
-  if (mother_email == NULL || (at = strchr(mother_email, '@')) == NULL) {
-    set_error(error, error_len, "母邮箱地址无效");
-    return -1;
-  }
-  local_len = (size_t) (at - mother_email);
-  if (local_len == 0 || local_len >= sizeof(local)) {
-    set_error(error, error_len, "母邮箱本地名长度非法");
-    return -1;
-  }
-  memcpy(local, mother_email, local_len);
-  local[local_len] = '\0';
-  mg_snprintf(out->email_domain, sizeof(out->email_domain), "%s", at + 1);
-
-  if (name_generator_generate(&name) != 0) {
-    set_error(error, error_len, "姓名生成失败");
-    return -1;
-  }
-  mg_snprintf(out->full_name, sizeof(out->full_name), "%s", name.full_name);
-  mg_snprintf(out->given_name, sizeof(out->given_name), "%s", name.given_name);
-  mg_snprintf(out->family_name, sizeof(out->family_name), "%s", name.family_name);
-
-  // outlook_alias_mode: "direct"=母号直注(一号一注册, 不加别名),
-  // 缺省/"alias"=别名复用(母号本地名 + "+随机后缀", 一母号多号)
-  int use_direct = 0;
-  {
-    sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(
-            db, "SELECT value FROM mail_settings WHERE key='outlook_alias_mode'",
-            -1, &st, NULL) == SQLITE_OK) {
-      if (sqlite3_step(st) == SQLITE_ROW) {
-        const unsigned char *v = sqlite3_column_text(st, 0);
-        if (v != NULL && strcmp((const char *) v, "direct") == 0) use_direct = 1;
-      }
-      sqlite3_finalize(st);
-    }
-  }
-
-  if (use_direct) {
-    // 母号直注: email = 母号本身(不加 +别名)
-    mg_snprintf(out->email_local, sizeof(out->email_local), "%s", local);
-    mg_snprintf(out->email, sizeof(out->email), "%s", mother_email);
-    if (email_exists(db, out->email)) {
-      set_error(error, error_len,
-                "母号已注册过账号(direct 模式一号一注册), 请换母号或切回别名模式");
-      return -1;
-    }
-  } else {
-    // 别名 = 母邮箱本地名 + "+随机后缀", 避开本地库已有账号
-    do {
-      char suffix[12];
-      generate_alias_suffix(suffix, sizeof(suffix));
-      mg_snprintf(out->email_local, sizeof(out->email_local), "%s+%s", local,
-                  suffix);
-      mg_snprintf(out->email, sizeof(out->email), "%s@%s", out->email_local,
-                  out->email_domain);
-      attempts++;
-    } while (attempts < 16 && email_exists(db, out->email));
-
-    if (email_exists(db, out->email)) {
-      set_error(error, error_len, "生成的 outlook 别名与现有账号重复");
-      return -1;
-    }
-  }
-  {
-    /* outlook 渠道: 优先用母号导入的密码, 未导入则随机兜底 */
-    char imported_pw[IDENTITY_PASSWORD_LEN] = "";
-    sqlite3_stmt *pst = NULL;
-    if (sqlite3_prepare_v2(
-            db, "SELECT password FROM outlook_mailboxes WHERE email=? COLLATE NOCASE",
-            -1, &pst, NULL) == SQLITE_OK) {
-      sqlite3_bind_text(pst, 1, mother_email, -1, SQLITE_TRANSIENT);
-      if (sqlite3_step(pst) == SQLITE_ROW) {
-        const unsigned char *pv = sqlite3_column_text(pst, 0);
-        if (pv != NULL)
-          mg_snprintf(imported_pw, sizeof(imported_pw), "%s", (const char *) pv);
-      }
-      sqlite3_finalize(pst);
-    }
-    if (imported_pw[0] != '\0')
-      mg_snprintf(out->password, sizeof(out->password), "%s", imported_pw);
-    else
-      generate_password(out->password, sizeof(out->password));
-  }
   generate_birthdate(out->birthdate, sizeof(out->birthdate), &out->age);
   return 0;
 }

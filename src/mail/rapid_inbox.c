@@ -1,7 +1,6 @@
 #include "mail/rapid_inbox.h"
 
 #include "http_client/http_client.h"
-#include "mail/outlook_pool.h"
 #include "mongoose.h"
 
 #include <ctype.h>
@@ -2274,13 +2273,6 @@ static int fetch_latest_code_impl(sqlite3 *db, const char *mailbox,
   int result = -1;
 
   if (code != NULL && code_len > 0) code[0] = '\0';
-  // outlook007: 若母邮箱命中 outlook 池, 用其专属接码链接(别名注册透明路由,
-  // 其它渠道不受影响)。返回 NOT_MINE 表示母邮箱不在池中, 继续走原有后端。
-  {
-    int oc = outlook_pool_try_fetch_code(db, mailbox, min_received_at, code,
-                                         code_len, error, error_len);
-    if (oc != OUTLOOK_POOL_NOT_MINE) return oc;
-  }
   read_mail_backend(db, backend, sizeof(backend));
   base_url = setting_value(
       db, "rapid_inbox_base_url",

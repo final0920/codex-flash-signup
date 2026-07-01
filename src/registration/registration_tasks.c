@@ -5,10 +5,10 @@
 #include "flow/flow_libcurl_impersonate.h"
 #include "http_client/browser_profile.h"
 #include "identity/identity_generator.h"
-#include "mail/outlook_pool.h"
 #include "oauth/oauth_provider.h"
 #include "proxy/mihomo_manager.h"
 #include "proxy/proxy_pool.h"
+#include "registration/chatgpt2api_register_provider.h"
 #include "registration/codex_direct_provider.h"
 #include "registration/platform_register_provider.h"
 #include "registration/web_register_provider.h"
@@ -159,7 +159,6 @@ struct registration_flow_job {
   enum registration_current_session_oauth_fallback_mode
       current_session_oauth_fallback_mode;
   enum registration_fastlane_stage scheduler_stage;
-  long outlook_mailbox_id;
 };
 
 struct oauth_race_state {
@@ -244,7 +243,7 @@ static const char *workflow_name(enum registration_workflow workflow) {
     case REG_WORKFLOW_OAUTH_ONLY: return "oauth_only";
     case REG_WORKFLOW_CHATGPT_LOGIN_ONLY: return "chatgpt_login_only";
     case REG_WORKFLOW_CODEX_CLI_SIMPLIFIED: return "codex_cli_simplified";
-    case REG_WORKFLOW_OUTLOOK_DIRECT: return "outlook_direct";
+    case REG_WORKFLOW_CHATGPT2API_REGISTER: return "chatgpt2api_register";
     case REG_WORKFLOW_REGISTER_ONLY:
     default: return "register_only";
   }
@@ -259,13 +258,14 @@ static bool workflow_uses_current_session_codex(
     enum registration_workflow workflow) {
   return workflow == REG_WORKFLOW_REGISTER_THEN_CURRENT_CODEX ||
          workflow == REG_WORKFLOW_CODEX_CLI_SIMPLIFIED ||
-         workflow == REG_WORKFLOW_OUTLOOK_DIRECT;
+         workflow == REG_WORKFLOW_CHATGPT2API_REGISTER;
 }
 
 static bool workflow_has_oauth(enum registration_workflow workflow) {
   return workflow == REG_WORKFLOW_REGISTER_THEN_OAUTH ||
          workflow == REG_WORKFLOW_REGISTER_THEN_CURRENT_CODEX ||
          workflow == REG_WORKFLOW_CODEX_CLI_SIMPLIFIED ||
+         workflow == REG_WORKFLOW_CHATGPT2API_REGISTER ||
          workflow == REG_WORKFLOW_OAUTH_ONLY;
 }
 
@@ -1794,18 +1794,7 @@ static int reassign_job_identity(sqlite3 *db, struct registration_flow_job *job,
 
   if (job == NULL) return -1;
   mg_snprintf(old_email, sizeof(old_email), "%s", job->identity.email);
-  if (job->workflow == REG_WORKFLOW_OUTLOOK_DIRECT) {
-    // outlook 直注: 同母邮箱换一个新别名(母邮箱单线程锁仍占用中)
-    char mother[IDENTITY_EMAIL_LEN];
-    outlook_pool_alias_to_mother(old_email, mother, sizeof(mother));
-    if (identity_generate_outlook_alias(db, mother, &job->identity, error,
-                                        sizeof(error)) != 0) {
-      task_log(job->task, flow_id ? flow_id : "", "error",
-               "远端提示邮箱已存在，但重新生成 outlook 别名失败: %s",
-               error[0] ? error : "身份信息生成失败");
-      return -1;
-    }
-  } else if (identity_generate(db, &job->identity, error, sizeof(error)) != 0) {
+  if (identity_generate(db, &job->identity, error, sizeof(error)) != 0) {
     task_log(job->task, flow_id ? flow_id : "", "error",
              "远端提示邮箱已存在，但重新生成邮箱失败: %s",
              error[0] ? error : "身份信息生成失败");
@@ -1827,9 +1816,8 @@ static int run_registration_flow_with_environment_retry(
   if (job == NULL || reg_flow == NULL) return -1;
   if (job->workflow == REG_WORKFLOW_CODEX_CLI_SIMPLIFIED) {
     provider = codex_direct_provider();
-  } else if (job->workflow == REG_WORKFLOW_OUTLOOK_DIRECT) {
-    // Outlook 直注: 复用 ChatGPT 网页注册主体, 注册后走当前会话 Codex OAuth(独立工作空间)
-    provider = web_register_provider();
+  } else if (job->workflow == REG_WORKFLOW_CHATGPT2API_REGISTER) {
+    provider = chatgpt2api_register_provider();
   } else {
     provider = job->register_provider == REG_REGISTER_PROVIDER_TEMPORARY
                    ? web_register_provider()
@@ -2059,12 +2047,6 @@ static void *flow_worker(void *arg) {
     bool reg_flow_ok =
         run_registration_flow_with_environment_retry(db, job, &reg_flow) == 0 &&
         reg_flow.status == FLOW_STATUS_SUCCESS;
-    // Outlook 直注: 注册流程(含 workspace 加入)已结束, 释放母邮箱单线程锁
-    if (job->workflow == REG_WORKFLOW_OUTLOOK_DIRECT &&
-        job->outlook_mailbox_id > 0) {
-      outlook_pool_release(db, job->outlook_mailbox_id, reg_flow_ok);
-      job->outlook_mailbox_id = -1;
-    }
     if (!reg_flow_ok) {
       if (workflow_uses_current_session_codex(job->workflow) &&
           reg_flow.persisted_account_id > 0) {
@@ -2154,7 +2136,7 @@ static int launch_flow_job(struct registration_task *task,
                            const struct identity_result *identity,
                            const struct browser_profile *profile,
                            const char *proxy_url, long account_id,
-                           const char *workspace_id, long outlook_mailbox_id,
+                           const char *workspace_id,
                            enum registration_fastlane_stage initial_stage) {
   struct registration_flow_job *job;
   pthread_t thread;
@@ -2171,7 +2153,6 @@ static int launch_flow_job(struct registration_task *task,
               sizeof(job->libcurl_impersonate_target), "%s",
               task_libcurl_impersonate_target(task));
   job->account_id = account_id;
-  job->outlook_mailbox_id = outlook_mailbox_id;
   job->scheduler_stage = initial_stage;
   job->auto_upload_oauth_success = task->auto_upload_oauth_success;
   job->discard_oauth_failed_accounts = task->discard_oauth_failed_accounts;
@@ -2290,7 +2271,6 @@ static void *task_worker(void *arg) {
       char proxy_url[FLOW_PROXY_LEN] = "";
       char workspace_id[FLOW_WORKSPACE_ID_LEN] = "";
       long account_id = 0;
-      long outlook_mailbox_id = -1;
       int proxy_rc;
       enum registration_fastlane_stage initial_stage;
 
@@ -2301,21 +2281,6 @@ static void *task_worker(void *arg) {
                                    sizeof(workspace_id)) != 0) {
           mark_account_load_failed(task, account_id);
           continue;
-        }
-      } else if (task->workflow == REG_WORKFLOW_OUTLOOK_DIRECT) {
-        char mother[IDENTITY_EMAIL_LEN] = "";
-        if (outlook_pool_claim(db, mother, sizeof(mother), NULL, 0,
-                               &outlook_mailbox_id, error,
-                               sizeof(error)) != 0) {
-          break;  // 母邮箱都在占用/达上限, 稍后再试(非致命)
-        }
-        if (identity_generate_outlook_alias(db, mother, &identity, error,
-                                            sizeof(error)) != 0) {
-          outlook_pool_release(db, outlook_mailbox_id, false);
-          mark_task_failed(task,
-                           error[0] ? error : "outlook 别名身份生成失败");
-          fatal = true;
-          break;
         }
       } else if (identity_generate(db, &identity, error, sizeof(error)) != 0) {
         mark_task_failed(task, error[0] ? error : "身份信息生成失败");
@@ -2341,12 +2306,7 @@ static void *task_worker(void *arg) {
       if (launch_flow_job(task, task->workflow, task->register_provider,
                           &identity, &profile,
                           proxy_rc > 0 ? proxy_url : "", account_id,
-                          workspace_id, outlook_mailbox_id,
-                          initial_stage) != 0) {
-        // 启动线程失败, 释放已 claim 的母邮箱
-        if (outlook_mailbox_id > 0) {
-          outlook_pool_release(db, outlook_mailbox_id, false);
-        }
+                          workspace_id, initial_stage) != 0) {
         mark_flow_launch_failed(task, "任务流程启动请求线程失败");
       }
     }

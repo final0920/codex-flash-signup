@@ -79,7 +79,7 @@
     services: UploadService[];
   };
 
-  type Workflow = 'register_only' | 'register_then_oauth' | 'register_then_current_codex' | 'codex_cli_simplified' | 'outlook_direct';
+  type Workflow = 'register_only' | 'register_then_oauth' | 'register_then_current_codex' | 'codex_cli_simplified' | 'chatgpt2api_register';
   type SchedulerMode = 'normal' | 'fastlane';
   type TargetMetric = 'register_task' | 'oauth_success';
   type RegisterProvider = 'platform' | 'temporary';
@@ -101,7 +101,7 @@
     { value: 'register_then_current_codex', label: 'Codex 极速', hint: '复用 Platform 登录态直接完成 Codex OAuth', icon: 'zap' },
     { value: 'register_then_oauth', label: '注册 + OAuth', hint: '注册成功后再走独立 OAuth 授权', icon: 'link' },
     { value: 'codex_cli_simplified', label: 'Codex 直注', hint: 'Codex CLI 直连注册，Team 域跳过手机号', icon: 'zap' },
-    { value: 'outlook_direct', label: 'Outlook 直注', hint: 'Outlook 母邮箱直注，outlook007 接码，注册后走当前会话 Codex OAuth（独立工作空间）', icon: 'mail' }
+    { value: 'chatgpt2api_register', label: 'ChatGPT2API 注册', hint: 'chatgpt2api 授权方式：Platform 注册换取 AT/RT，内置邮箱收码', icon: 'link' }
   ];
 
   const schedulerOptions: { value: SchedulerMode; label: string; hint: string; icon: IconName }[] = [

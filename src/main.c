@@ -6,7 +6,6 @@
 #include "flow/flow_libcurl_impersonate.h"
 #include "http_client/browser_profile.h"
 #include "http_client/http_client.h"
-#include "mail/outlook_pool.h"
 #include "mail/rapid_inbox.h"
 #include "proxy/mihomo_manager.h"
 #include "proxy/proxy_pool.h"
@@ -553,42 +552,6 @@ static void handle_mail_api(struct mg_connection *c, struct mg_http_message *hm)
   }
 }
 
-static void handle_outlook_api(struct mg_connection *c,
-                               struct mg_http_message *hm) {
-  if (mg_strcmp(hm->method, mg_str("GET")) == 0 &&
-      mg_match(hm->uri, mg_str("/api/outlook/list"), NULL)) {
-    char *json = outlook_pool_list_json(s_db);
-    mg_http_reply(c, 200, JSON_HEADERS, "%s", json ? json : "{}");
-    free(json);
-  } else if (mg_strcmp(hm->method, mg_str("POST")) == 0 &&
-             mg_match(hm->uri, mg_str("/api/outlook/import"), NULL)) {
-    char *text = mg_json_get_str(hm->body, "$.text");
-    char *json = outlook_pool_import_json(s_db, text ? text : "");
-    mg_free(text);
-    mg_http_reply(c, 200, JSON_HEADERS, "%s", json ? json : "{\"ok\":0}");
-    free(json);
-  } else if (mg_strcmp(hm->method, mg_str("POST")) == 0 &&
-             mg_match(hm->uri, mg_str("/api/outlook/delete"), NULL)) {
-    long *ids = NULL;
-    size_t count = parse_id_array(hm->body, &ids);
-    int deleted = outlook_pool_delete_ids(s_db, ids, count);
-    free(ids);
-    mg_http_reply(c, deleted < 0 ? 500 : 200, JSON_HEADERS, "{%m:%d}\n",
-                  MG_ESC("deleted"), deleted < 0 ? 0 : deleted);
-  } else if (mg_strcmp(hm->method, mg_str("POST")) == 0 &&
-             mg_match(hm->uri, mg_str("/api/outlook/config"), NULL)) {
-    char *workspace_id = mg_json_get_str(hm->body, "$.workspace_id");
-    char *join_mode = mg_json_get_str(hm->body, "$.join_mode");
-    int rc = outlook_pool_save_config(s_db, workspace_id, join_mode);
-    mg_free(workspace_id);
-    mg_free(join_mode);
-    mg_http_reply(c, rc == 0 ? 200 : 500, JSON_HEADERS, "{%m:%d}\n",
-                  MG_ESC("ok"), rc == 0);
-  } else {
-    mg_http_reply(c, 404, JSON_HEADERS, "{\"error\":\"not found\"}\n");
-  }
-}
-
 static void handle_registration_api(struct mg_connection *c,
                                     struct mg_http_message *hm) {
   if (mg_strcmp(hm->method, mg_str("GET")) == 0 &&
@@ -816,9 +779,9 @@ static void handle_registration_api(struct mg_connection *c,
                 strcmp(workflow_value, "codex_team") == 0)) {
       options.workflow = REG_WORKFLOW_CODEX_CLI_SIMPLIFIED;
     } else if (workflow_value != NULL &&
-               (strcmp(workflow_value, "outlook_direct") == 0 ||
-                strcmp(workflow_value, "outlook") == 0)) {
-      options.workflow = REG_WORKFLOW_OUTLOOK_DIRECT;
+               (strcmp(workflow_value, "chatgpt2api_register") == 0 ||
+                strcmp(workflow_value, "chatgpt2api") == 0)) {
+      options.workflow = REG_WORKFLOW_CHATGPT2API_REGISTER;
     } else if (workflow_value != NULL &&
                strcmp(workflow_value, "fastlane") == 0) {
       options.scheduler_mode = REG_SCHEDULER_FASTLANE;
@@ -1144,8 +1107,6 @@ static void handle_http(struct mg_connection *c, struct mg_http_message *hm) {
     handle_proxy_api(c, hm);
   } else if (uri_has_prefix(hm->uri, "/api/mail")) {
     handle_mail_api(c, hm);
-  } else if (uri_has_prefix(hm->uri, "/api/outlook")) {
-    handle_outlook_api(c, hm);
   } else if (uri_has_prefix(hm->uri, "/api/upload")) {
     handle_upload_api(c, hm);
   } else if (uri_has_prefix(hm->uri, "/api/accounts")) {

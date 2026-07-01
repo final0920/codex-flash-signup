@@ -4,7 +4,6 @@
   import AccountPage from './pages/AccountPage.svelte';
   import LoginPage from './pages/LoginPage.svelte';
   import MailConfigPage from './pages/MailConfigPage.svelte';
-  import OutlookMailPage from './pages/OutlookMailPage.svelte';
   import ProxyPoolPage from './pages/ProxyPoolPage.svelte';
   import RegistrationPage from './pages/RegistrationPage.svelte';
   import UploadConfigPage from './pages/UploadConfigPage.svelte';
@@ -36,7 +35,6 @@
       items: [
         { route: 'proxy-pool', label: '代理池', icon: 'globe' },
         { route: 'mail', label: '邮件', icon: 'mail' },
-        { route: 'outlook-mail', label: 'Outlook 池', icon: 'mail' },
         { route: 'accounts', label: '账号管理', icon: 'user' }
       ]
     },
@@ -295,8 +293,6 @@
         <ProxyPoolPage />
       {:else if route === 'mail'}
         <MailConfigPage />
-      {:else if route === 'outlook-mail'}
-        <OutlookMailPage />
       {:else if route === 'accounts'}
         <AccountPage />
       {:else if route === 'registration'}
