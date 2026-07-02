@@ -114,6 +114,7 @@ struct flow_context {
   char workspace_id[FLOW_WORKSPACE_ID_LEN];
   char impersonate_target[FLOW_IMPERSONATE_TARGET_LEN];
   char success_account_status[24];
+  char success_auth_source[32];
   bool persist_on_success;
   bool environment_retryable;
   bool identity_retryable;

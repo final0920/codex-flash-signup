@@ -86,7 +86,9 @@ static int ensure_schema_columns(sqlite3 *db) {
   rc = ensure_column(db, "account_secrets", "session_token",
                      "session_token TEXT");
   if (rc != SQLITE_OK) return rc;
-  return ensure_column(db, "account_secrets", "cookies", "cookies TEXT");
+  rc = ensure_column(db, "account_secrets", "cookies", "cookies TEXT");
+  if (rc != SQLITE_OK) return rc;
+  return ensure_column(db, "accounts", "auth_source", "auth_source TEXT");
 }
 
 static int ensure_data_dir(void) {

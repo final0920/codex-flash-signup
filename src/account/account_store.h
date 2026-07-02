@@ -16,6 +16,7 @@ struct account_success_record {
   const char *cookies;
   const char *external_account_id;
   const char *workspace_id;
+  const char *auth_source;
   long last_refreshed_at;
 };
 
@@ -28,8 +29,8 @@ struct account_oauth_record {
 
 char *account_summary_json(sqlite3 *db);
 char *account_list_json(sqlite3 *db, const char *query, const char *status,
-                        const char *upload_state, long cursor, long limit,
-                        long page);
+                        const char *upload_state, const char *auth_source,
+                        long cursor, long limit, long page);
 char *account_detail_json(sqlite3 *db, long id);
 int account_insert_success(sqlite3 *db, const struct account_success_record *record,
                            long *out_id);

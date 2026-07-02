@@ -881,6 +881,7 @@ static void handle_accounts_api(struct mg_connection *c, struct mg_http_message 
     char q[256] = "";
     char status[32] = "";
     char upload_state[32] = "";
+    char auth_source[32] = "";
     char cursor_buf[32] = "";
     char limit_buf[32] = "";
     char page_buf[32] = "";
@@ -891,6 +892,8 @@ static void handle_accounts_api(struct mg_connection *c, struct mg_http_message 
     mg_http_get_var(&hm->query, "status", status, sizeof(status));
     mg_http_get_var(&hm->query, "upload_state", upload_state,
                     sizeof(upload_state));
+    mg_http_get_var(&hm->query, "auth_source", auth_source,
+                    sizeof(auth_source));
     if (mg_http_get_var(&hm->query, "cursor", cursor_buf,
                         sizeof(cursor_buf)) > 0) {
       cursor = strtol(cursor_buf, NULL, 10);
@@ -902,7 +905,8 @@ static void handle_accounts_api(struct mg_connection *c, struct mg_http_message 
     if (mg_http_get_var(&hm->query, "page", page_buf, sizeof(page_buf)) > 0) {
       page = strtol(page_buf, NULL, 10);
     }
-    json = account_list_json(s_db, q, status, upload_state, cursor, limit, page);
+    json = account_list_json(s_db, q, status, upload_state, auth_source, cursor,
+                             limit, page);
     mg_http_reply(c, 200, JSON_HEADERS, "%s", json ? json : "{\"items\":[]}");
     free(json);
   } else if (mg_strcmp(hm->method, mg_str("POST")) == 0 &&

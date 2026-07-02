@@ -783,6 +783,8 @@ static int c2a_persist_and_finish(struct flow_context *flow,
      引擎重复写、触发 email 唯一约束失败。 */
   mg_snprintf(flow->success_account_status, sizeof(flow->success_account_status),
               "active");
+  mg_snprintf(flow->success_auth_source, sizeof(flow->success_auth_source),
+              "chatgpt2api");
   flow_context_log(flow, "info",
                    "chatgpt2api 注册完成: access=%dB refresh=%s id=%s account=%s "
                    "workspace=%s",

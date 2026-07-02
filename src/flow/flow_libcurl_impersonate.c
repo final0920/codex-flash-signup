@@ -392,6 +392,8 @@ static int persist_success(sqlite3 *db, struct flow_context *flow) {
   record.cookies = flow->cookies;
   record.external_account_id = flow->external_account_id;
   record.workspace_id = flow->workspace_id;
+  record.auth_source =
+      flow->success_auth_source[0] ? flow->success_auth_source : NULL;
   if (account_insert_success(db, &record, &flow->persisted_account_id) != 0) {
     flow_context_fail(flow, "成功结果写入账号库失败");
     return -1;

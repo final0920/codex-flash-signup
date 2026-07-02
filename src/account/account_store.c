@@ -74,19 +74,21 @@ char *account_summary_json(sqlite3 *db) {
 static void append_account_row(struct mg_iobuf *io, sqlite3_stmt *stmt) {
   mg_xprintf(
       mg_pfn_iobuf, io,
-      "{%m:%lld,%m:%m,%m:%m,%m:%m,%m:%lld,%m:%lld,%m:%lld}",
+      "{%m:%lld,%m:%m,%m:%m,%m:%m,%m:%lld,%m:%lld,%m:%lld,%m:%m}",
       MG_ESC("id"), sqlite3_column_int64(stmt, 0), MG_ESC("email"),
       MG_ESC(column_text(stmt, 1)), MG_ESC("status"),
       MG_ESC(column_text(stmt, 2)), MG_ESC("upload_state"),
       MG_ESC(column_text(stmt, 3)), MG_ESC("created_at"),
       sqlite3_column_int64(stmt, 4), MG_ESC("updated_at"),
       sqlite3_column_int64(stmt, 5), MG_ESC("last_refreshed_at"),
-      sqlite3_column_int64(stmt, 6));
+      sqlite3_column_int64(stmt, 6), MG_ESC("auth_source"),
+      MG_ESC(column_text(stmt, 7)));
 }
 
 static sqlite3_int64 account_count_rows(sqlite3 *db, const char *q,
                                         const char *status,
                                         const char *upload_state,
+                                        const char *auth_source,
                                         bool has_query) {
   sqlite3_stmt *stmt = NULL;
   sqlite3_int64 total = 0;
@@ -97,19 +99,22 @@ static sqlite3_int64 account_count_rows(sqlite3 *db, const char *q,
     sql =
         "SELECT COUNT(*) FROM accounts "
         "WHERE (?1='' OR status=?1) "
-        "AND (?2='' OR upload_state=?2)";
+        "AND (?2='' OR upload_state=?2) "
+        "AND (?3='' OR COALESCE(NULLIF(auth_source,''),'standard')=?3)";
   } else if (all_digits(q)) {
     sql =
         "SELECT COUNT(*) FROM accounts "
         "WHERE (?1='' OR status=?1) "
         "AND (?2='' OR upload_state=?2) "
-        "AND id=?3";
+        "AND (?3='' OR COALESCE(NULLIF(auth_source,''),'standard')=?3) "
+        "AND id=?4";
   } else {
     sql =
         "SELECT COUNT(*) FROM accounts "
         "WHERE (?1='' OR status=?1) "
         "AND (?2='' OR upload_state=?2) "
-        "AND email LIKE ?3 COLLATE NOCASE";
+        "AND (?3='' OR COALESCE(NULLIF(auth_source,''),'standard')=?3) "
+        "AND email LIKE ?4 COLLATE NOCASE";
   }
 
   if (db == NULL || sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
@@ -120,12 +125,14 @@ static sqlite3_int64 account_count_rows(sqlite3 *db, const char *q,
   sqlite3_bind_text(stmt, 1, status ? status : "", -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(stmt, 2, upload_state ? upload_state : "", -1,
                     SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 3, auth_source ? auth_source : "", -1,
+                    SQLITE_TRANSIENT);
   if (has_query) {
     if (all_digits(q)) {
-      sqlite3_bind_int64(stmt, 3, strtol(q, NULL, 10));
+      sqlite3_bind_int64(stmt, 4, strtol(q, NULL, 10));
     } else {
       mg_snprintf(prefix_buf, sizeof(prefix_buf), "%s%%", q);
-      sqlite3_bind_text(stmt, 3, prefix_buf, -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text(stmt, 4, prefix_buf, -1, SQLITE_TRANSIENT);
     }
   }
 
@@ -137,8 +144,8 @@ static sqlite3_int64 account_count_rows(sqlite3 *db, const char *q,
 }
 
 char *account_list_json(sqlite3 *db, const char *query, const char *status,
-                        const char *upload_state, long cursor, long limit,
-                        long page) {
+                        const char *upload_state, const char *auth_source,
+                        long cursor, long limit, long page) {
   sqlite3_stmt *stmt = NULL;
   struct mg_iobuf io = {0, 0, 0, 1024};
   char query_buf[256], prefix_buf[260];
@@ -157,7 +164,8 @@ char *account_list_json(sqlite3 *db, const char *query, const char *status,
   mg_snprintf(query_buf, sizeof(query_buf), "%s", query ? query : "");
   q = trim(query_buf);
   has_query = q[0] != '\0';
-  total_count = account_count_rows(db, q, status, upload_state, has_query);
+  total_count =
+      account_count_rows(db, q, status, upload_state, auth_source, has_query);
   if (total_count > 0) {
     total_pages = (total_count + effective_limit - 1) / effective_limit;
   }
@@ -171,52 +179,58 @@ char *account_list_json(sqlite3 *db, const char *query, const char *status,
     if (page_mode) {
       sql =
           "SELECT id,email,status,upload_state,created_at,updated_at,"
-          "last_refreshed_at FROM accounts "
+          "last_refreshed_at,COALESCE(auth_source,'') FROM accounts "
           "WHERE (?1='' OR status=?1) "
           "AND (?2='' OR upload_state=?2) "
-          "ORDER BY id DESC LIMIT ?3 OFFSET ?4";
+          "AND (?3='' OR COALESCE(NULLIF(auth_source,''),'standard')=?3) "
+          "ORDER BY id DESC LIMIT ?4 OFFSET ?5";
     } else {
       sql =
           "SELECT id,email,status,upload_state,created_at,updated_at,"
-          "last_refreshed_at FROM accounts "
+          "last_refreshed_at,COALESCE(auth_source,'') FROM accounts "
           "WHERE (?1='' OR status=?1) "
           "AND (?2='' OR upload_state=?2) "
-          "AND (?3=0 OR id < ?3) "
-          "ORDER BY id DESC LIMIT ?4";
+          "AND (?3='' OR COALESCE(NULLIF(auth_source,''),'standard')=?3) "
+          "AND (?4=0 OR id < ?4) "
+          "ORDER BY id DESC LIMIT ?5";
     }
   } else if (all_digits(q)) {
     if (page_mode) {
       sql =
           "SELECT id,email,status,upload_state,created_at,updated_at,"
-          "last_refreshed_at FROM accounts "
+          "last_refreshed_at,COALESCE(auth_source,'') FROM accounts "
           "WHERE (?1='' OR status=?1) "
           "AND (?2='' OR upload_state=?2) "
-          "AND id=?3 ORDER BY id DESC LIMIT ?4 OFFSET ?5";
+          "AND (?3='' OR COALESCE(NULLIF(auth_source,''),'standard')=?3) "
+          "AND id=?4 ORDER BY id DESC LIMIT ?5 OFFSET ?6";
     } else {
       sql =
           "SELECT id,email,status,upload_state,created_at,updated_at,"
-          "last_refreshed_at FROM accounts "
+          "last_refreshed_at,COALESCE(auth_source,'') FROM accounts "
           "WHERE (?1='' OR status=?1) "
           "AND (?2='' OR upload_state=?2) "
-          "AND id=?3 ORDER BY id DESC LIMIT ?4";
+          "AND (?3='' OR COALESCE(NULLIF(auth_source,''),'standard')=?3) "
+          "AND id=?4 ORDER BY id DESC LIMIT ?5";
     }
   } else {
     if (page_mode) {
       sql =
           "SELECT id,email,status,upload_state,created_at,updated_at,"
-          "last_refreshed_at FROM accounts "
+          "last_refreshed_at,COALESCE(auth_source,'') FROM accounts "
           "WHERE (?1='' OR status=?1) "
           "AND (?2='' OR upload_state=?2) "
-          "AND email LIKE ?3 COLLATE NOCASE "
-          "ORDER BY id DESC LIMIT ?4 OFFSET ?5";
+          "AND (?3='' OR COALESCE(NULLIF(auth_source,''),'standard')=?3) "
+          "AND email LIKE ?4 COLLATE NOCASE "
+          "ORDER BY id DESC LIMIT ?5 OFFSET ?6";
     } else {
       sql =
           "SELECT id,email,status,upload_state,created_at,updated_at,"
-          "last_refreshed_at FROM accounts "
+          "last_refreshed_at,COALESCE(auth_source,'') FROM accounts "
           "WHERE (?1='' OR status=?1) "
           "AND (?2='' OR upload_state=?2) "
-          "AND email LIKE ?3 COLLATE NOCASE "
-          "ORDER BY id DESC LIMIT ?4";
+          "AND (?3='' OR COALESCE(NULLIF(auth_source,''),'standard')=?3) "
+          "AND email LIKE ?4 COLLATE NOCASE "
+          "ORDER BY id DESC LIMIT ?5";
     }
   }
 
@@ -225,23 +239,25 @@ char *account_list_json(sqlite3 *db, const char *query, const char *status,
     sqlite3_bind_text(stmt, 1, status ? status : "", -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 2, upload_state ? upload_state : "", -1,
                       SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, auth_source ? auth_source : "", -1,
+                      SQLITE_TRANSIENT);
     if (!has_query) {
       if (page_mode) {
-        sqlite3_bind_int64(stmt, 3, effective_limit);
-        sqlite3_bind_int64(stmt, 4, offset);
+        sqlite3_bind_int64(stmt, 4, effective_limit);
+        sqlite3_bind_int64(stmt, 5, offset);
       } else {
-        sqlite3_bind_int64(stmt, 3, cursor > 0 ? cursor : 0);
-        sqlite3_bind_int64(stmt, 4, bind_limit);
+        sqlite3_bind_int64(stmt, 4, cursor > 0 ? cursor : 0);
+        sqlite3_bind_int64(stmt, 5, bind_limit);
       }
     } else if (all_digits(q)) {
-      sqlite3_bind_int64(stmt, 3, strtol(q, NULL, 10));
-      sqlite3_bind_int64(stmt, 4, page_mode ? effective_limit : bind_limit);
-      if (page_mode) sqlite3_bind_int64(stmt, 5, offset);
+      sqlite3_bind_int64(stmt, 4, strtol(q, NULL, 10));
+      sqlite3_bind_int64(stmt, 5, page_mode ? effective_limit : bind_limit);
+      if (page_mode) sqlite3_bind_int64(stmt, 6, offset);
     } else {
       mg_snprintf(prefix_buf, sizeof(prefix_buf), "%s%%", q);
-      sqlite3_bind_text(stmt, 3, prefix_buf, -1, SQLITE_TRANSIENT);
-      sqlite3_bind_int64(stmt, 4, page_mode ? effective_limit : bind_limit);
-      if (page_mode) sqlite3_bind_int64(stmt, 5, offset);
+      sqlite3_bind_text(stmt, 4, prefix_buf, -1, SQLITE_TRANSIENT);
+      sqlite3_bind_int64(stmt, 5, page_mode ? effective_limit : bind_limit);
+      if (page_mode) sqlite3_bind_int64(stmt, 6, offset);
     }
 
     while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -278,7 +294,7 @@ char *account_detail_json(sqlite3 *db, long id) {
       "SELECT a.id,a.email,a.status,a.upload_state,a.created_at,a.updated_at,"
       "a.last_refreshed_at,s.password,s.access_token,s.refresh_token,"
       "s.id_token,s.session_token,s.cookies,s.external_account_id,"
-      "s.workspace_id "
+      "s.workspace_id,COALESCE(a.auth_source,'') "
       "FROM accounts a LEFT JOIN account_secrets s ON s.account_id=a.id "
       "WHERE a.id=?";
 
@@ -295,7 +311,7 @@ char *account_detail_json(sqlite3 *db, long id) {
     mg_xprintf(
         mg_pfn_iobuf, &io,
         "{%m:%d,%m:{%m:%lld,%m:%m,%m:%m,%m:%m,%m:%lld,%m:%lld,%m:%lld,"
-        "%m:%m,%m:%m,%m:%m,%m:%m,%m:%m,%m:%m,%m:%m,%m:%m}}",
+        "%m:%m,%m:%m,%m:%m,%m:%m,%m:%m,%m:%m,%m:%m,%m:%m,%m:%m}}",
         MG_ESC("ok"), 1, MG_ESC("account"), MG_ESC("id"),
         sqlite3_column_int64(stmt, 0), MG_ESC("email"),
         MG_ESC(column_text(stmt, 1)), MG_ESC("status"),
@@ -311,7 +327,8 @@ char *account_detail_json(sqlite3 *db, long id) {
         MG_ESC(column_text(stmt, 11)), MG_ESC("cookies"),
         MG_ESC(column_text(stmt, 12)), MG_ESC("external_account_id"),
         MG_ESC(column_text(stmt, 13)), MG_ESC("workspace_id"),
-        MG_ESC(column_text(stmt, 14)));
+        MG_ESC(column_text(stmt, 14)), MG_ESC("auth_source"),
+        MG_ESC(column_text(stmt, 15)));
   } else {
     mg_xprintf(mg_pfn_iobuf, &io, "{%m:%d,%m:%m}", MG_ESC("ok"), 0,
                MG_ESC("error"), MG_ESC("账号不存在"));
@@ -331,8 +348,8 @@ int account_insert_success(sqlite3 *db,
   const char *status = "temp";
   const char *upload_state = "not_uploaded";
   const char *account_sql =
-      "INSERT INTO accounts(email,status,upload_state,created_at,updated_at,"
-      "last_refreshed_at) VALUES(?,?,?,unixepoch(),unixepoch(),?)";
+      "INSERT INTO accounts(email,status,upload_state,auth_source,created_at,"
+      "updated_at,last_refreshed_at) VALUES(?,?,?,?,unixepoch(),unixepoch(),?)";
   const char *secret_sql =
       "INSERT INTO account_secrets(account_id,password,access_token,"
       "refresh_token,id_token,session_token,cookies,external_account_id,"
@@ -365,10 +382,16 @@ int account_insert_success(sqlite3 *db,
   sqlite3_bind_text(account_stmt, 1, record->email, -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(account_stmt, 2, status, -1, SQLITE_TRANSIENT);
   sqlite3_bind_text(account_stmt, 3, upload_state, -1, SQLITE_TRANSIENT);
-  if (record->last_refreshed_at > 0) {
-    sqlite3_bind_int64(account_stmt, 4, record->last_refreshed_at);
+  if (record->auth_source != NULL && record->auth_source[0] != '\0') {
+    sqlite3_bind_text(account_stmt, 4, record->auth_source, -1,
+                      SQLITE_TRANSIENT);
   } else {
     sqlite3_bind_null(account_stmt, 4);
+  }
+  if (record->last_refreshed_at > 0) {
+    sqlite3_bind_int64(account_stmt, 5, record->last_refreshed_at);
+  } else {
+    sqlite3_bind_null(account_stmt, 5);
   }
   rc = sqlite3_step(account_stmt);
   if (rc != SQLITE_DONE) goto fail;

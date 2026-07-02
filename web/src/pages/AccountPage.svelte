@@ -24,6 +24,7 @@
   type AccountItem = {
     id: number; email: string; status: AccountStatus; upload_state: UploadState;
     created_at: number; updated_at: number; last_refreshed_at: number;
+    auth_source: string;
   };
 
   type AccountDetail = AccountItem & {
@@ -79,6 +80,12 @@
     { value: 'not_uploaded', label: '未上传' }
   ];
 
+  const authSourceOptions = [
+    { value: '', label: '全部来源' },
+    { value: 'chatgpt2api', label: 'ChatGPT2API' },
+    { value: 'standard', label: '普通' }
+  ];
+
   const emptySummary: AccountSummary = {
     total: 0, active: 0, expired: 0, temp: 0, failed: 0,
     uploaded: 0, not_uploaded: 0, updated_at: 0
@@ -91,6 +98,7 @@
   let searchText = $state('');
   let statusFilter = $state('');
   let uploadFilter = $state('');
+  let authSourceFilter = $state('');
   let limit = $state(50);
   let oauthConcurrency = $state(10);
   let currentPage = $state(1);
@@ -152,7 +160,7 @@
     { label: '最后刷新', value: formatRelativeTime(accountDetail.last_refreshed_at) }
   ] : []);
 
-  let hasFilter = $derived(Boolean(searchText.trim() || statusFilter || uploadFilter));
+  let hasFilter = $derived(Boolean(searchText.trim() || statusFilter || uploadFilter || authSourceFilter));
 
   async function loadSummary() {
     try {
@@ -191,6 +199,7 @@
       if (searchText.trim()) params.set('q', searchText.trim());
       if (statusFilter) params.set('status', statusFilter);
       if (uploadFilter) params.set('upload_state', uploadFilter);
+      if (authSourceFilter) params.set('auth_source', authSourceFilter);
       const response = await fetch(`/api/accounts?${params.toString()}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
@@ -579,6 +588,7 @@
     searchText = '';
     statusFilter = '';
     uploadFilter = '';
+    authSourceFilter = '';
     loadAccounts(true);
   }
 
@@ -629,6 +639,12 @@
       <span class="form-label">上传</span>
       <select class="input" bind:value={uploadFilter} onchange={() => loadAccounts(true)}>
         {#each uploadOptions as opt}<option value={opt.value}>{opt.label}</option>{/each}
+      </select>
+    </label>
+    <label class="form-field">
+      <span class="form-label">来源</span>
+      <select class="input" bind:value={authSourceFilter} onchange={() => loadAccounts(true)}>
+        {#each authSourceOptions as opt}<option value={opt.value}>{opt.label}</option>{/each}
       </select>
     </label>
     <label class="form-field">
@@ -760,7 +776,10 @@
               </td>
               <td><span class="cell-mono">#{account.id}</span></td>
               <td class="account-email-cell">
-                <span class="cell-primary">{account.email}</span>
+                <span class="cell-primary">
+                  {account.email}
+                  {#if account.auth_source === 'chatgpt2api'}<span class="tag" style="background: rgba(99,102,241,0.14); color: #6366f1; margin-left: 6px;">ChatGPT2API</span>{/if}
+                </span>
                 <span class="cell-secondary">注册 {formatRelativeTime(account.created_at)}</span>
               </td>
               <td><StatusBadge label={statusLabel(account.status)} variant={statusVariant(account.status)} /></td>
@@ -822,6 +841,7 @@
           <div style="display: flex; gap: 6px; flex-wrap: wrap;">
             <StatusBadge label={statusLabel(account.status)} variant={statusVariant(account.status)} />
             <StatusBadge label={uploadLabel(account.upload_state)} variant={uploadVariant(account.upload_state)} />
+            {#if account.auth_source === 'chatgpt2api'}<span class="tag" style="background: rgba(99,102,241,0.14); color: #6366f1;">ChatGPT2API</span>{/if}
             <span class="tag">#{account.id}</span>
           </div>
           <div class="data-card-meta">
@@ -930,6 +950,7 @@
         <div class="account-detail-badges">
           <StatusBadge label={statusLabel(detailAccount.status)} variant={statusVariant(detailAccount.status)} />
           <StatusBadge label={uploadLabel(detailAccount.upload_state)} variant={uploadVariant(detailAccount.upload_state)} />
+          {#if detailAccount.auth_source === 'chatgpt2api'}<span class="tag" style="background: rgba(99,102,241,0.14); color: #6366f1;">ChatGPT2API</span>{/if}
         </div>
         <div class="account-detail-actions">
           <button class="btn btn-sm" type="button" onclick={() => copyToClipboard(detailAccount?.email, 'email', '邮箱')} disabled={!detailAccount?.email}>

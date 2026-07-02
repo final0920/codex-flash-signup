@@ -4,6 +4,7 @@
 #include "http_client/browser_profile.h"
 #include "mongoose.h"
 #include "proxy/proxy_pool.h"
+#include "upload/aether_upload.h"
 
 #include <sqlite3.h>
 #include <stdbool.h>
@@ -15,6 +16,8 @@
 #define OAUTH_TOKEN_URL "https://auth.openai.com/oauth/token"
 #define OAUTH_CLIENT_ID "app_EMoamEEZ73f0CkXaXp7hrann"
 #define OAUTH_REDIRECT_URI "http://localhost:1455/auth/callback"
+#define PLATFORM_TOKEN_URL "https://auth.openai.com/api/accounts/oauth/token"
+#define PLATFORM_CLIENT_ID "app_2SKx67EdpoN0G6j64rFvigXD"
 #define TOKEN_REFRESH_TIMEOUT_MS 30000L
 #define TOKEN_VALIDATE_URL "https://chatgpt.com/backend-api/me"
 #define TOKEN_VALIDATE_TIMEOUT_MS 30000L
@@ -105,21 +108,24 @@ static int load_access_token(sqlite3 *db, long id, char **out_token) {
   return result;
 }
 
-static int load_refresh_token(sqlite3 *db, long id, char **out_token) {
+static int load_refresh_token(sqlite3 *db, long id, char **out_token,
+                              char **out_source) {
   sqlite3_stmt *stmt = NULL;
   const char *sql =
-      "SELECT COALESCE(s.refresh_token,'') "
+      "SELECT COALESCE(s.refresh_token,''),COALESCE(a.auth_source,'') "
       "FROM accounts a LEFT JOIN account_secrets s ON s.account_id=a.id "
       "WHERE a.id=?";
   int result = -1;
 
   if (out_token != NULL) *out_token = NULL;
+  if (out_source != NULL) *out_source = NULL;
   if (db == NULL || id <= 0 || out_token == NULL) return -1;
   if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
   sqlite3_bind_int64(stmt, 1, id);
   if (sqlite3_step(stmt) == SQLITE_ROW) {
     const char *token = column_text(stmt, 0);
     *out_token = strdup(token);
+    if (out_source != NULL) *out_source = strdup(column_text(stmt, 1));
     result = *out_token != NULL ? 1 : -1;
   } else {
     result = 0;
@@ -168,11 +174,26 @@ static char *form_encode(const char *value) {
   return out;
 }
 
-static char *build_refresh_request_body(const char *refresh_token) {
+static char *build_refresh_request_body(const char *refresh_token,
+                                        bool is_platform) {
   char *refresh_enc = NULL;
   char *redirect_enc = NULL;
   char *body = NULL;
   size_t body_len;
+
+  if (is_platform) {
+    /* chatgpt2api(Platform) 刷新：JSON body + Platform 客户端，无 redirect_uri */
+    body_len = strlen("{\"client_id\":\"\",\"grant_type\":\"refresh_token\","
+                      "\"refresh_token\":\"\"}") +
+               strlen(PLATFORM_CLIENT_ID) + strlen(refresh_token) + 1;
+    body = (char *) calloc(1, body_len);
+    if (body == NULL) return NULL;
+    mg_snprintf(body, body_len,
+                "{\"client_id\":\"" PLATFORM_CLIENT_ID "\","
+                "\"grant_type\":\"refresh_token\",\"refresh_token\":\"%s\"}",
+                refresh_token);
+    return body;
+  }
 
   refresh_enc = form_encode(refresh_token);
   redirect_enc = form_encode(OAUTH_REDIRECT_URI);
@@ -306,7 +327,7 @@ static void token_refresh_result_free(struct token_refresh_result *result) {
 }
 
 static void refresh_token_with_libcurl_impersonate(
-    const char *refresh_token, const char *proxy_url,
+    const char *refresh_token, const char *proxy_url, bool is_platform,
     struct token_refresh_result *result) {
   struct browser_profile profile;
   struct flow_http_header headers[2];
@@ -315,7 +336,7 @@ static void refresh_token_with_libcurl_impersonate(
   char *body = NULL;
   char error[FLOW_ERROR_LEN] = "";
 
-  body = build_refresh_request_body(refresh_token);
+  body = build_refresh_request_body(refresh_token, is_platform);
   if (body == NULL) {
     mg_snprintf(result->error, sizeof(result->error), "构造刷新请求失败");
     return;
@@ -323,14 +344,15 @@ static void refresh_token_with_libcurl_impersonate(
 
   browser_profile_generate(&profile, "US", "desktop");
   headers[0].name = "Content-Type";
-  headers[0].value = "application/x-www-form-urlencoded";
+  headers[0].value =
+      is_platform ? "application/json" : "application/x-www-form-urlencoded";
   headers[1].name = "Accept";
   headers[1].value = "application/json";
 
   memset(&req, 0, sizeof(req));
   memset(&res, 0, sizeof(res));
   req.method = "POST";
-  req.url = OAUTH_TOKEN_URL;
+  req.url = is_platform ? PLATFORM_TOKEN_URL : OAUTH_TOKEN_URL;
   req.timeout_ms = TOKEN_REFRESH_TIMEOUT_MS;
   req.body = body;
   req.body_len = strlen(body);
@@ -354,7 +376,7 @@ static void refresh_token_with_libcurl_impersonate(
 }
 
 static void refresh_by_oauth_token(const char *refresh_token,
-                                   const char *proxy_url,
+                                   const char *proxy_url, bool is_platform,
                                    struct token_refresh_result *result) {
   memset(result, 0, sizeof(*result));
   if (refresh_token == NULL || refresh_token[0] == '\0') {
@@ -363,7 +385,8 @@ static void refresh_by_oauth_token(const char *refresh_token,
                 "账号没有 refresh_token");
     return;
   }
-  refresh_token_with_libcurl_impersonate(refresh_token, proxy_url, result);
+  refresh_token_with_libcurl_impersonate(refresh_token, proxy_url, is_platform,
+                                         result);
 }
 
 static int update_refreshed_tokens(sqlite3 *db, long id,
@@ -420,6 +443,8 @@ char *account_refresh_tokens_json(sqlite3 *db, const long *ids, size_t count) {
   int success_count = 0;
   int failed_count = 0;
   bool first = true;
+  long *reupload_ids = NULL;
+  size_t reupload_count = 0;
 
   if (db == NULL) {
     mg_xprintf(mg_pfn_iobuf, &io, "{%m:%d,%m:%m}", MG_ESC("ok"), 0,
@@ -447,20 +472,26 @@ char *account_refresh_tokens_json(sqlite3 *db, const long *ids, size_t count) {
              MG_ESC("checked_count"), (int) count, MG_ESC("proxy_used"),
              proxy_url[0] ? "true" : "false", MG_ESC("details"));
 
+  reupload_ids = (long *) calloc(count, sizeof(long));
   for (size_t i = 0; i < count; i++) {
     char *refresh_token = NULL;
-    int load_rc = load_refresh_token(db, ids[i], &refresh_token);
+    char *auth_source = NULL;
+    int load_rc = load_refresh_token(db, ids[i], &refresh_token, &auth_source);
+    bool is_platform =
+        auth_source != NULL && strcmp(auth_source, "chatgpt2api") == 0;
     struct token_refresh_result result;
 
     memset(&result, 0, sizeof(result));
     if (load_rc == 1) {
       refresh_by_oauth_token(refresh_token, proxy_url[0] ? proxy_url : NULL,
-                             &result);
+                             is_platform, &result);
       if (result.success) {
         if (update_refreshed_tokens(db, ids[i], &result) != 0) {
           result.success = false;
           mg_snprintf(result.error, sizeof(result.error),
                       "Token 刷新成功但数据库更新失败");
+        } else if (is_platform && reupload_ids != NULL) {
+          reupload_ids[reupload_count++] = ids[i];
         }
       } else if (result.definitive && result.http_status > 0) {
         update_status(db, ids[i], "expired");
@@ -486,6 +517,7 @@ char *account_refresh_tokens_json(sqlite3 *db, const long *ids, size_t count) {
 
     token_refresh_result_free(&result);
     free(refresh_token);
+    free(auth_source);
   }
 
   mg_xprintf(mg_pfn_iobuf, &io,
@@ -493,6 +525,13 @@ char *account_refresh_tokens_json(sqlite3 *db, const long *ids, size_t count) {
              success_count, MG_ESC("failed_count"), failed_count,
              MG_ESC("affected"), success_count);
   mg_iobuf_add(&io, io.len, "", 1);
+  /* chatgpt2api(Platform) 账号刷新成功后自动重推送 Aether(oauth 号池) */
+  if (reupload_ids != NULL && reupload_count > 0) {
+    char *up = aether_upload_accounts_json(db, reupload_ids, reupload_count,
+                                           "oauth");
+    free(up);
+  }
+  free(reupload_ids);
   return (char *) io.buf;
 }
 
