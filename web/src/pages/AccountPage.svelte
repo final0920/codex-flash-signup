@@ -716,6 +716,7 @@
             <th>账号邮箱</th>
             <th>状态</th>
             <th>上传</th>
+            <th>来源</th>
             <th>时间</th>
             <th></th>
           </tr>
@@ -728,6 +729,7 @@
               <td><Skeleton width="180px" height="14px" /><Skeleton width="120px" height="10px" style="margin-top: 6px;" /></td>
               <td><Skeleton width="60px" height="22px" rounded="full" /></td>
               <td><Skeleton width="60px" height="22px" rounded="full" /></td>
+              <td><Skeleton width="70px" height="22px" rounded="full" /></td>
               <td><Skeleton width="100px" height="12px" /></td>
               <td><Skeleton width="160px" height="22px" /></td>
             </tr>
@@ -757,6 +759,7 @@
             <th>账号邮箱</th>
             <th>状态</th>
             <th>上传</th>
+            <th>来源</th>
             <th>更新</th>
             <th style="text-align: right;">操作</th>
           </tr>
@@ -776,14 +779,18 @@
               </td>
               <td><span class="cell-mono">#{account.id}</span></td>
               <td class="account-email-cell">
-                <span class="cell-primary">
-                  {account.email}
-                  {#if account.auth_source === 'chatgpt2api'}<span class="tag" style="background: rgba(99,102,241,0.14); color: #6366f1; margin-left: 6px;">ChatGPT2API</span>{/if}
-                </span>
+                <span class="cell-primary">{account.email}</span>
                 <span class="cell-secondary">注册 {formatRelativeTime(account.created_at)}</span>
               </td>
               <td><StatusBadge label={statusLabel(account.status)} variant={statusVariant(account.status)} /></td>
               <td><StatusBadge label={uploadLabel(account.upload_state)} variant={uploadVariant(account.upload_state)} /></td>
+              <td>
+                {#if account.auth_source === 'chatgpt2api'}
+                  <span class="tag" style="background: rgba(99,102,241,0.14); color: #6366f1;">ChatGPT2API</span>
+                {:else}
+                  <span class="cell-secondary">普通</span>
+                {/if}
+              </td>
               <td>
                 <span class="cell-primary" style="font-weight: 400;">{formatRelativeTime(account.updated_at)}</span>
                 {#if account.last_refreshed_at}<span class="cell-secondary">刷新 {formatRelativeTime(account.last_refreshed_at)}</span>{/if}
